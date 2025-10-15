@@ -1,0 +1,17 @@
+<!-- wizards/hello_wizard_views.xml -->
+<odoo>
+  <record id="view_albaran_print_hello_wizard" model="ir.ui.view">
+    <field name="name">albaran.print.hello.wizard.form</field>
+    <field name="model">albaran.print.hello.wizard</field>
+    <field name="arch" type="xml">
+      <form string="Impresión de Albarán">
+        <group>
+          <field name="message"/>                      <!-- muestra "Hola munod" -->
+        </group>
+        <footer>
+          <button string="Cerrar" class="btn-secondary" special="cancel"/>  <!-- cerrar -->
+        </footer>
+      </form>
+    </field>
+  </record>
+</odoo>
