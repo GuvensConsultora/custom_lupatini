@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from odoo import fields, models
+from odoo import api, fields, models
 from odoo.exceptions import UserError
 
 class ResConfigSettings(models.TransientModel):
@@ -53,13 +53,44 @@ class StockPicking(models.Model):
             "context": {"default_message": "Hola munod"},
         }
 
+def _slug(text):                                      # normaliza texto para usar en code/prefix
+    text = (text or "").strip().upper()               # mayúsculas y trim
+    return "".join(ch for ch in text if ch.isalnum()) # solo A-Z0-9
+
 class StockPickingType(models.Model):
     _inherit = "stock.picking.type"
 
-    print_sequence_id = fields.Many2one(
+    print_sequence_id = fields.Many2one(           # secuencia de impresión (ya creada en el paso anterior)
         "ir.sequence",
         string="Secuencia de impresión",
-        help="Secuencia usada para numeración/folio del impreso",
-        domain="[('company_id','=',False),'|',('company_id','=',False),('company_id','=', company_id)]",
+        help="Secuencia usada para foliar el impreso (no afecta la referencia del albarán).",
+        domain="[('company_id','in',[False, company_id])]",
     )
-    
+
+    def _ensure_print_sequence_with_ou(self):      # crea/asigna secuencia con tipo + UO en code
+        for ptype in self:                         # iterar tipos seleccionados
+            if ptype.print_sequence_id:            # si ya existe, no crear de nuevo
+                continue
+            ou = ptype.warehouse_id and ptype.warehouse_id.operating_unit_id  # trae UO desde almacén
+            if not ou:                             # si no hay UO, no forzar creación
+                continue
+            type_key = _slug(ptype.code or "ALB")  # clave del tipo (OUT/INT/…)
+            ou_key   = _slug(ou.name or ou.code or f"OU{ou.id}")  # clave de la UO
+            seq_code = f"print.{type_key}.{ou_key}"               # code interno con tipo y UO
+            prefix   = f"{type_key}/{ou_key}/"                    # prefijo visible, ej: OUT/CORDOBA/
+            seq = self.env["ir.sequence"].create({                # crear secuencia
+                "name": f"Print {ptype.name} - {ou.name}",        # nombre legible
+                "implementation": "standard",                     # estándar
+                "prefix": prefix,                                 # prefijo con tipo+UO
+                "padding": 6,                                     # 000001
+                "company_id": ptype.company_id.id or False,       # compañía del tipo
+                "code": seq_code,                                 # code interno con tipo+UO
+            })
+            ptype.print_sequence_id = seq.id                      # asigna al tipo
+
+    @api.model_create_multi
+    def create(self, vals_list):                  # (opcional, pero útil) al crear el tipo, asegurar secuencia
+        records = super().create(vals_list)       # crea tipos
+        records._ensure_print_sequence_with_ou()  # genera secuencia con tipo+UO (si hay UO)
+        return records
+
