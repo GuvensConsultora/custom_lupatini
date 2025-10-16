@@ -38,7 +38,9 @@ class AlbaranPrintHelloWizard(models.TransientModel):
     lines_per_doc = fields.Integer(string="Líneas por documento", required=True)
     expected_docs = fields.Integer(string="Remitos esperados", compute="_compute_totals", store=False)
     detail_note = fields.Html(string="Detalle", sanitize=False, readonly=True)
-
+    sequence_id = fields.Many2one("ir.sequence", string="Secuencia de impresión", readonly=True)
+    next_numbers_preview = fields.Text(string="Próximos números", readonly=True)
+    
     @api.depends("picking_id", "lines_per_doc")
     def _compute_totals(self):
         for w in self:
@@ -62,12 +64,10 @@ class AlbaranPrintHelloWizard(models.TransientModel):
         }
 
 
-
-    
-
 class StockPicking(models.Model):
     _inherit = "stock.picking"
 
+    
     def action_print_intercept(self):
         self.ensure_one()
         if self.picking_type_code not in ("outgoing", "internal"):
@@ -82,10 +82,34 @@ class StockPicking(models.Model):
         else:
             lpd = 25
 
+
+        # 1) Total de líneas (ajusta a move_line si lo usás)
+        moves = self.move_ids.filtered(lambda m: m.state != "cancel" and (m.product_uom_qty or m.quantity_done))
+        total = len(moves)    
+
+        # 2) Remitos esperados
+        expected_docs = math.ceil(total / max(lpd, 1)) if total else 0
+
+            
+        # (supuesto) el tipo de operación tiene la secuencia en este campo:
+        seq = self.picking_type_id.print_sequence_id
+        
+        next_list = []
+        if seq and expected_docs:
+            cur = seq._get_current_sequence() if hasattr(seq, "_get_current_sequence") else seq
+            start = (cur.number_next_actual or seq.number_next_actual or 1)
+            step  = (cur.number_increment or seq.number_increment or 1)
+            for i in range(expected_docs):
+                # get_next_char formatea con prefijo/sufijo sin avanzar el contador
+                next_list.append(seq.get_next_char(start + i * step))
+
+
         # crear el wizard con valores iniciales
         wiz = self.env["albaran.print.hello.wizard"].create({
             "picking_id": self.id,
             "lines_per_doc": lpd,
+            "sequence_id": seq.id if seq else False,
+            "next_numbers_preview": "\n".join(next_list),  # o HTML si prefieres
             "message": "Hola mundoooo",
         })
 
@@ -122,7 +146,7 @@ class StockPicking(models.Model):
 
        # }
 
-
+###############################################################
 
 def _slug(text):                                      # normaliza texto para usar en code/prefix
     text = (text or "").strip().upper()               # mayúsculas y trim
