@@ -5,10 +5,23 @@
     <field name="model">albaran.print.hello.wizard</field>
     <field name="arch" type="xml">
       <form string="Impresión de Albarán">
+	  <group>
+          <field name="picking_id" readonly="1"/>
+          <field name="picking_type_code" readonly="1" string="Tipo"/>
+          <field name="total_lines" readonly="1"/>
+          <field name="lines_per_doc"/>
+          <field name="expected_docs" readonly="1"/>
+        </group>
         <group>
+          <field name="detail_note" widget="html" nolabel="1" readonly="1"/>
+        </group>
+
+	<group>
           <field name="message"/>                      <!-- muestra "Hola munod" -->
         </group>
-        <footer>
+
+	<footer>	  
+	  <button string="Confirmar" type="object" name="action_confirm_preprint" class="btn-primary"/>
           <button string="Cerrar" class="btn-secondary" special="cancel"/>  <!-- cerrar -->
         </footer>
       </form>

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from odoo import api, fields, models
 from odoo.exceptions import UserError
+import math
 
 class ResConfigSettings(models.TransientModel):
     _inherit = "res.config.settings"
@@ -31,6 +32,38 @@ class AlbaranPrintHelloWizard(models.TransientModel):
         default="Hola mundo",
         readonly=True
     )
+    picking_id = fields.Many2one("stock.picking", string="Albarán", required=True, readonly=True)
+    picking_type_code = fields.Selection(related="picking_id.picking_type_code", readonly=True)
+    total_lines = fields.Integer(string="Líneas totales", compute="_compute_totals", store=False)
+    lines_per_doc = fields.Integer(string="Líneas por documento", required=True)
+    expected_docs = fields.Integer(string="Remitos esperados", compute="_compute_totals", store=False)
+    detail_note = fields.Html(string="Detalle", sanitize=False, readonly=True)
+
+    @api.depends("picking_id", "lines_per_doc")
+    def _compute_totals(self):
+        for w in self:
+            if not w.picking_id:
+                w.total_lines = 0; w.expected_docs = 0; continue
+            moves = w.picking_id.move_ids.filtered(
+                lambda m: m.state != "cancel" and (m.product_uom_qty or m.quantity_done)
+            )
+            total = len(moves)
+            lpd = max(w.lines_per_doc or 1, 1)
+            w.total_lines = total
+            w.expected_docs = math.ceil(total / lpd) if total else 0
+    
+    def action_confirm_preprint(self):
+        self.ensure_one()
+        return {
+        "type": "ir.actions.client",
+        "tag": "display_notification",
+        "params": {"title": "OK", "message": "Confirmado", "type": "success"},
+        "context": {"default_picking_id": self.id}, 
+        }
+
+
+
+    
 
 class StockPicking(models.Model):
     _inherit = "stock.picking"
@@ -40,7 +73,23 @@ class StockPicking(models.Model):
         if self.picking_type_code not in ("outgoing", "internal"):
             raise UserError("Solo disponible para albaranes OUT o INT.")
 
-        # Acción completa: res_model + views + view_id + target=new
+        # leer parámetros para líneas por doc
+        ICP = self.env["ir.config_parameter"].sudo()
+        if self.picking_type_code == "outgoing":
+            lpd = int(ICP.get_param("stock_preprinted_delivery.preprint_lines_out", default=25))
+        elif self.picking_type_code == "internal":
+            lpd = int(ICP.get_param("stock_preprinted_delivery.preprint_lines_int", default=25))
+        else:
+            lpd = 25
+
+        # crear el wizard con valores iniciales
+        wiz = self.env["albaran.print.hello.wizard"].create({
+            "picking_id": self.id,
+            "lines_per_doc": lpd,
+            "message": "Hola mundoooo",
+        })
+
+        # abrir ese registro
         view = self.env.ref("stock_preprinted_delivery_settings.view_albaran_print_hello_wizard")
         return {
             "type": "ir.actions.act_window",
@@ -48,10 +97,32 @@ class StockPicking(models.Model):
             "res_model": "albaran.print.hello.wizard",
             "view_mode": "form",
             "view_id": view.id,
-            "views": [(view.id, "form")],
+            "res_id": wiz.id,
             "target": "new",
-            "context": {"default_message": "Hola munod"},
         }
+
+
+###################################################
+
+        # self.ensure_one()
+        # if self.picking_type_code not in ("outgoing", "internal"):
+        #     raise UserError("Solo disponible para albaranes OUT o INT.")
+
+        # # Acción completa: res_model + views + view_id + target=new
+        # view = self.env.ref("stock_preprinted_delivery_settings.view_albaran_print_hello_wizard")
+        # return {
+        #     "type": "ir.actions.act_window",
+        #     "name": "Imprimir",
+        #     "res_model": "albaran.print.hello.wizard",
+        #     "view_mode": "form",
+        #     "view_id": view.id,
+        #     "views": [(view.id, "form")],
+        #     "target": "new",
+        #     "context": {"default_message": "Hola mundoooo"},
+
+       # }
+
+
 
 def _slug(text):                                      # normaliza texto para usar en code/prefix
     text = (text or "").strip().upper()               # mayúsculas y trim
