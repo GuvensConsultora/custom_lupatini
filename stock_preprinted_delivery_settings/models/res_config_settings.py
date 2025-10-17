@@ -91,16 +91,49 @@ class AlbaranPrintHelloWizard(models.TransientModel):
       
         created = self.env['stock.picking']
         for batch in batches[1:]:
+            # al crear cada nuevo albarán (en el split), copiá también la secuencia:
+            new_pick = p.copy({"name": "/", "move_ids": [], "print_sequence_id": (p.print_sequence_id or p.picking_type_id.print_sequence_id).id})
             # copia del picking SIN movimientos
-            new_pick = p.copy({"name": "/", "move_ids": []})
+            #new_pick = p.copy({"name": "/", "move_ids": []})
             # reasigna los movimientos del lote al nuevo picking
             batch.write({"picking_id": new_pick.id})
             created |= new_pick
 
+        # dentro de action_confirm_preprint, LUEGO del split (tenés p y created/new_picks)
+
+        # 1) asegurar secuencia de impresión en cada picking (original + nuevos)
+        for pk in (p | created):
+            if not pk.print_sequence_id:
+                pk.write({'print_sequence_id': (pk.picking_type_id.print_sequence_id or False)})
+            if not pk.print_sequence_id:
+                raise UserError(f"Sin secuencia de impresión en {pk.display_name}")
+
+        for pk in (p | created):
+            if not pk.print_folio:
+               seq_id = pk.print_sequence_id
+               folio = pk.write({'print_folio': seq_id.number_next_actual})  # guarda el número formateado
+               actualiza = seq_id.write({'number_next_actual': (seq_id.number_next_actual + seq_id.number_increment)})
+
+
+        # después del split (tenés: p = original, created = nuevos)
+        pickings_to_print = p | created
+
+        # 1) confirmar (de draft a confirmed)
+        pickings_to_print.action_confirm()     # crea moves en estado correcto
+
+        # 2) asignar (reserva y genera move_line_ids de operaciones)
+        #pickings_to_print._action_assign()
+
+        # 3) imprimir
+        if p.picking_type_code == 'outgoing':
+            return self.env.ref('stock.action_report_delivery').report_action(pickings_to_print.ids)
+        else:
+            return self.env.ref('stock.action_report_picking').report_action(pickings_to_print.ids)
+
         # feedback: cantidad + nombres
         #names = ", ".join([(n or "(sin nombre)") for n in created.mapped("name")])
-        names = ", ".join(created.mapped("display_name")) or "-"
-        #names = ", ".join(created.mapped("name")) or "-"
+        #names = ", ".join(created.mapped("display_name")) or "-"
+        names = ", ".join(created.mapped("name")) or "-"
         msg = f"Generados {1 + len(created)} albaranes. Nuevos: {names}"
             
         return {
@@ -113,6 +146,7 @@ class AlbaranPrintHelloWizard(models.TransientModel):
             },
         }
 
+        
 
 
 

@@ -10,7 +10,7 @@
       </xpath>
       <xpath expr="//h1" position="after">
         <group string="Impresión">
-          <field name="print_sequence_id" invisible="1" />
+          <field name="print_sequence_id" readonly="1" />
           <field name="print_folio" readonly="1"/>
         </group>
       </xpath>
