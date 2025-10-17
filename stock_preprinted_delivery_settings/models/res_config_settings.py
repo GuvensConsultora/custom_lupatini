@@ -3,6 +3,7 @@ from odoo import api, fields, models
 from odoo.exceptions import UserError
 import math
 
+
 class ResConfigSettings(models.TransientModel):
     _inherit = "res.config.settings"
 
@@ -23,6 +24,13 @@ class ResConfigSettings(models.TransientModel):
     )
 
 
+def _valid_moves(picking):
+    """Líneas a considerar: no canceladas/terminadas y con cantidades."""
+    return picking.move_ids.filtered(
+        lambda m: m.state not in ('cancel', 'done') and (m.product_uom_qty or m.quantity_done)
+    )
+
+    
 class AlbaranPrintHelloWizard(models.TransientModel):
     _name = "albaran.print.hello.wizard"
     _description = "Wizard de impresión - Hola"
@@ -53,19 +61,136 @@ class AlbaranPrintHelloWizard(models.TransientModel):
             lpd = max(w.lines_per_doc or 1, 1)
             w.total_lines = total
             w.expected_docs = math.ceil(total / lpd) if total else 0
-    
+
+
+    # SOLO split por N líneas (sin secuencias). Odoo 17.
+
     def action_confirm_preprint(self):
+        """Parte el albarán en lotes de 'lines_per_doc' (primer lote queda en el original)."""
         self.ensure_one()
+        p   = self.picking_id
+        lpd = max(self.lines_per_doc or 1, 1)  # evita 0
+        moves = p.move_ids          # En teoría traigo el recordsets no una lista
+        total = len(p.move_ids.ids)
+        if total <= lpd:
+            ###### NADA QUE SEPARAR SOLO SE LE VA  A ASIGNAR EL VALOR DE LA SEQ DE IMPRESIÓN. Y MANDAR A IMPRESIÓN
+            return {
+            "type": "ir.actions.client",
+                "tag": "display_notification",
+                "params": {"title": "Split", "message": "No se requiere split.", "type": "success"},
+            }
+
+      
+        #### PROCESO PARA SEPARAR LOS REMITOS Y LUEGO DE SEPARADOS CON LOS ID DE LOS PICKING GENERADOS ASIGNAR LAS SECUENCIAS DE IMPRESIÓN E IMPRIMIR.
+
+      
+        
+        batches = [moves[i:i + lpd] for i in range(0, total, lpd)]  # chunks
+
+        #raise UserError(f"Picking actual: {p.name} lineas {len(p.move_ids.ids)} Tope  de lineas: {lpd}. Total de lineas reales; {total}  /n Bloques {batches}")
+      
+        created = self.env['stock.picking']
+        for batch in batches[1:]:
+            # copia del picking SIN movimientos
+            new_pick = p.copy({"name": "/", "move_ids": []})
+            # reasigna los movimientos del lote al nuevo picking
+            batch.write({"picking_id": new_pick.id})
+            created |= new_pick
+
+        # feedback: cantidad + nombres
+        #names = ", ".join([(n or "(sin nombre)") for n in created.mapped("name")])
+        names = ", ".join(created.mapped("display_name")) or "-"
+        #names = ", ".join(created.mapped("name")) or "-"
+        msg = f"Generados {1 + len(created)} albaranes. Nuevos: {names}"
+            
         return {
-        "type": "ir.actions.client",
-        "tag": "display_notification",
-        "params": {"title": "OK", "message": "Confirmado", "type": "success"},
-        "context": {"default_picking_id": self.id}, 
+            "type": "ir.actions.client",
+            "tag": "display_notification",
+            "params": {
+                "title": "Split",
+                "message": f"Generados {1 + len(created)} albaranes (original + {len(created)} nuevos).",
+                "type": "success",
+            },
         }
 
 
+
+
+
+
+#############################################################
+
+#    def action_confirm_preprint(self):
+
+        # """Parte el albarán en bloques de 'lines_per_doc' y asigna folios de impresión."""
+        # self.ensure_one()
+        # p = self.picking_id
+        # lpd = max(self.lines_per_doc or 1, 1)                      # evita división por cero       
+        # # --- Secuencia de impresión y campos destino en stock.picking ---
+        # seq = p.picking_type_id.print_sequence_id                  # ir.sequence definida en el tipo
+        # has_seq_field = 'print_sequence_id' in p._fields           # M2O a ir.sequence
+        # has_folio_field = 'print_folio' in p._fields               # Char con el folio consumido
+        # # raise UserError(f"Picking: {p.id}, Linea por documento {lpd} \n Secuencia {seq}")
+        # # --- Garantiza que el picking original tenga seteada la secuencia a usar ---
+        # if seq and has_seq_field and (not p.print_sequence_id or p.print_sequence_id.id != seq.id):
+        #     p.write({'print_sequence_id': seq.id})
+
+        # # --- Partición de movimientos en lotes (primer lote queda en el original) ---
+        # moves = _valid_moves(p)
+        # total = len(moves)
+        # new_picks = self.env['stock.picking']
+        # if total > lpd:
+        #     batches = [moves[i:i + lpd] for i in range(0, total, lpd)]
+        #     for batch in batches[1:]:
+        #         # copia del picking SIN líneas para alojar el lote
+        #         vals_copy = {"name": False, "move_ids": []}
+        #         if seq and has_seq_field:
+        #             vals_copy["print_sequence_id"] = seq.id        # misma secuencia en el nuevo
+        #         np = p.copy(vals_copy)
+        #         batch.write({"picking_id": np.id})                 # reasigna líneas al nuevo picking
+        #         new_picks |= np
+
+        # # --- Consume y asigna folios (formateados) a todos los pickings resultantes ---
+        # if seq and has_folio_field:
+        #     seq_env = self.env['ir.sequence'].with_context(        # respeta rangos por fecha
+        #         ir_sequence_date=fields.Date.context_today(self)
+        #     )
+        #     for pk in (p | new_picks):
+        #         if not pk.print_folio:                             # no duplicar consumo
+        #             pk.write({'print_folio': seq_env.next_by_id(seq.id)})
+
+        # # --- Feedback visual ---
+        # total_docs = 1 + len(new_picks)
+        # return {
+        #     "type": "ir.actions.client",
+        #     "tag": "display_notification",
+        #     "params": {
+        #         "title": "Split y folio",
+        #         "message": f"{total_docs} albarán(es) generados y foliados.",
+        #         "type": "success",
+        #     },
+        # }
+
+##########################################
+
+
+        # self.ensure_one()
+        # return {
+        # "type": "ir.actions.client",
+        # "tag": "display_notification",
+        # "params": {"title": "OK", "message": "Confirmado", "type": "success"},
+        # "context": {"default_picking_id": self.id}, 
+        # }
+
 class StockPicking(models.Model):
     _inherit = "stock.picking"
+    # secuencia elegida para foliar este picking (no avanza contador)
+    print_sequence_id = fields.Many2one(
+        "ir.sequence", string="Secuencia de impresión", copy=False
+    )
+    # número asignado al consumir la secuencia (siguiente formateado)
+    print_folio = fields.Char(string="Folio de impresión", copy=False, index=True)
+
 
     
     def action_print_intercept(self):
@@ -81,7 +206,6 @@ class StockPicking(models.Model):
             lpd = int(ICP.get_param("stock_preprinted_delivery.preprint_lines_int", default=25))
         else:
             lpd = 25
-
 
         # 1) Total de líneas (ajusta a move_line si lo usás)
         moves = self.move_ids.filtered(lambda m: m.state != "cancel" and (m.product_uom_qty or m.quantity_done))
@@ -124,29 +248,6 @@ class StockPicking(models.Model):
             "res_id": wiz.id,
             "target": "new",
         }
-
-
-###################################################
-
-        # self.ensure_one()
-        # if self.picking_type_code not in ("outgoing", "internal"):
-        #     raise UserError("Solo disponible para albaranes OUT o INT.")
-
-        # # Acción completa: res_model + views + view_id + target=new
-        # view = self.env.ref("stock_preprinted_delivery_settings.view_albaran_print_hello_wizard")
-        # return {
-        #     "type": "ir.actions.act_window",
-        #     "name": "Imprimir",
-        #     "res_model": "albaran.print.hello.wizard",
-        #     "view_mode": "form",
-        #     "view_id": view.id,
-        #     "views": [(view.id, "form")],
-        #     "target": "new",
-        #     "context": {"default_message": "Hola mundoooo"},
-
-       # }
-
-###############################################################
 
 def _slug(text):                                      # normaliza texto para usar en code/prefix
     text = (text or "").strip().upper()               # mayúsculas y trim

@@ -8,6 +8,12 @@
       <xpath expr="//header//button[@type='action' and @name='361']" position="replace">
         <button name="action_print_intercept" string="Imprimiiir" type="object" class="btn-primary"/>
       </xpath>
+      <xpath expr="//h1" position="after">
+        <group string="Impresión">
+          <field name="print_sequence_id" invisible="1" />
+          <field name="print_folio" readonly="1"/>
+        </group>
+      </xpath>
     </field>
   </record>
 </odoo>
