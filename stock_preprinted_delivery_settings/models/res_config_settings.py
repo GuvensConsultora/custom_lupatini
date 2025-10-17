@@ -97,6 +97,8 @@ class AlbaranPrintHelloWizard(models.TransientModel):
             #new_pick = p.copy({"name": "/", "move_ids": []})
             # reasigna los movimientos del lote al nuevo picking
             batch.write({"picking_id": new_pick.id})
+            # mover líneas de operación (clave para que el reporte las vea)
+            batch.mapped("move_line_ids").write({"picking_id": new_pick.id})
             created |= new_pick
 
         # dentro de action_confirm_preprint, LUEGO del split (tenés p y created/new_picks)
@@ -119,10 +121,14 @@ class AlbaranPrintHelloWizard(models.TransientModel):
         pickings_to_print = p | created
 
         # 1) confirmar (de draft a confirmed)
-        pickings_to_print.action_confirm()     # crea moves en estado correcto
+        #pickings_to_print.action_confirm()     # crea moves en estado correcto
 
+        for pk in pickings_to_print:
+            pk.action_confirm()
+            pk.with_context(skip_immediate=True).button_validate()  # valida cada albarán
+            #pk.action_assign() # Comprobamos disponibilidad
         # 2) asignar (reserva y genera move_line_ids de operaciones)
-        #pickings_to_print._action_assign()
+        # pickings_to_print._action_assign()
 
         # 3) imprimir
         if p.picking_type_code == 'outgoing':
